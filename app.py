@@ -1,16 +1,5 @@
 """
 Part B + C — Live Streamlit dashboard.
-
-Deploy free at Streamlit Community Cloud:
-  1. Push this repo to GitHub (public or private with access granted)
-  2. Go to share.streamlit.io → New app → select repo → app.py
-  3. Click Deploy
-
-On every visit:
-  - Fetches the latest closed BTCUSDT 1h bar from Binance
-  - Runs 10,000-path GBM Monte Carlo
-  - Shows current price, 95% forecast range, last-50-bar chart, backtest metrics
-  - Appends prediction to live_predictions.jsonl (Part C persistence)
 """
 
 import json
@@ -21,23 +10,27 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 from backtest import evaluate, winkler_score
 from model import fetch_btc_hourly, predict_interval
 
-# ── Page config ──────────────────────────────────────────────────────────────
+# ── Page config ───────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="BTC Forecast | AlphaI × Polaris",
+    page_title="BTC Forecast | AlphaI x Polaris",
     page_icon="₿",
     layout="wide",
 )
+
+# Auto-refresh every 60 seconds
+st_autorefresh(interval=60_000, key="btc_refresh")
 
 BACKTEST_FILE  = "backtest_results.jsonl"
 LIVE_PRED_FILE = "live_predictions.jsonl"
 
 
-# ── File I/O helpers ─────────────────────────────────────────────────────────
+# ── File I/O helpers ──────────────────────────────────────────────────────────
 
 def _read_jsonl(path: str) -> list[dict]:
     if not os.path.exists(path):
@@ -73,7 +66,44 @@ def load_live_history() -> list[dict]:
     return _read_jsonl(LIVE_PRED_FILE)
 
 
-# ── Data fetch + model run (cached 55s so rapid reloads don't spam Binance) ──
+def resolve_predictions(preds: list[dict], prices: pd.Series) -> list[dict]:
+    """
+    For each prediction made at bar_time T, the actual is the close of bar T+1h.
+    Look that up in the prices series (indexed by open_time UTC).
+    """
+    # Normalise price index to UTC-aware for reliable lookup
+    idx = prices.index
+    if idx.tzinfo is None:
+        idx = idx.tz_localize("UTC")
+
+    price_map = {ts: float(p) for ts, p in zip(idx, prices.values)}
+
+    resolved = []
+    for p in preds:
+        entry = dict(p)
+        bar_ts = pd.Timestamp(p["bar_time"])
+        if bar_ts.tzinfo is None:
+            bar_ts = bar_ts.tz_localize("UTC")
+        actual_ts = bar_ts + pd.Timedelta(hours=1)
+
+        # Look for actual close (allow 1-min slop for DST / ms rounding)
+        actual = None
+        for ts, price in price_map.items():
+            if abs((ts - actual_ts).total_seconds()) < 120:
+                actual = price
+                break
+
+        entry["actual"] = actual
+        if actual is not None:
+            entry["result"] = "Hit" if p["low_95"] <= actual <= p["high_95"] else "Miss"
+        else:
+            entry["result"] = "Pending"
+        resolved.append(entry)
+
+    return resolved
+
+
+# ── Data fetch + model (cached 55s to avoid hammering Binance on every rerun) -
 
 @st.cache_data(ttl=55)
 def get_data_and_forecast():
@@ -84,7 +114,7 @@ def get_data_and_forecast():
     return prices, low_95, high_95, mu, sigma, nu
 
 
-# ── Main layout ──────────────────────────────────────────────────────────────
+# ── Main layout ───────────────────────────────────────────────────────────────
 
 st.title("BTC/USDT Next-Hour Forecast")
 st.caption(
@@ -110,7 +140,7 @@ live_rec = {
 }
 append_live_prediction(live_rec)
 
-# ── Section 1 — Backtest metrics (Part A) ────────────────────────────────────
+# ── Part A: Backtest metrics ──────────────────────────────────────────────────
 
 st.subheader("Part A: 30-Day Backtest Metrics (720 bars)")
 bt = load_backtest_metrics()
@@ -130,49 +160,41 @@ else:
 
 st.divider()
 
-# ── Section 2 — Live forecast ─────────────────────────────────────────────────
+# ── Part B: Current forecast ──────────────────────────────────────────────────
 
 st.subheader("Part B: Current Forecast")
 
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("BTC Price",            f"${current_price:,.2f}",  f"{pct_change:+.2f}%")
-m2.metric("Forecast Low  (95%)",  f"${low_95:,.2f}")
-m3.metric("Forecast High (95%)",  f"${high_95:,.2f}")
-m4.metric("Range Width",          f"${high_95 - low_95:,.2f}")
+m1.metric("BTC Price",           f"${current_price:,.2f}", f"{pct_change:+.2f}%")
+m2.metric("Forecast Low (95%)",  f"${low_95:,.2f}")
+m3.metric("Forecast High (95%)", f"${high_95:,.2f}")
+m4.metric("Range Width",         f"${high_95 - low_95:,.2f}")
 
-# ── Chart: last 50 bars + shaded forecast ribbon ─────────────────────────────
-
+# Chart: last 50 bars + shaded forecast ribbon
 last_50 = prices.iloc[-50:]
 ts_list  = last_50.index.tolist()
 next_ts  = ts_list[-1] + pd.Timedelta(hours=1)
 
 fig = go.Figure()
 
-# Price history line
 fig.add_trace(go.Scatter(
     x=ts_list, y=last_50.values,
     mode="lines", name="BTC Close (1h)",
     line=dict(color="#F7931A", width=2),
 ))
-
-# Latest close dot
 fig.add_trace(go.Scatter(
     x=[ts_list[-1]], y=[current_price],
     mode="markers", name="Latest close",
     marker=dict(color="#F7931A", size=9, symbol="circle"),
 ))
-
-# Shaded 95% CI ribbon
 fig.add_trace(go.Scatter(
     x=[ts_list[-1], next_ts, next_ts, ts_list[-1]],
-    y=[high_95,     high_95, low_95,  low_95],
+    y=[high_95, high_95, low_95, low_95],
     fill="toself",
     fillcolor="rgba(30, 120, 255, 0.18)",
     line=dict(color="rgba(0,0,0,0)"),
-    name=f"95% CI  [{low_95:,.0f} to {high_95:,.0f}]",
+    name=f"95% CI [{low_95:,.0f} to {high_95:,.0f}]",
 ))
-
-# Dashed boundary lines
 for y_val in [low_95, high_95]:
     fig.add_trace(go.Scatter(
         x=[ts_list[-1], next_ts],
@@ -194,71 +216,70 @@ st.plotly_chart(fig, use_container_width=True)
 
 with st.expander("Model parameters (this run)"):
     p1, p2, p3 = st.columns(3)
-    p1.metric("Hourly drift μ",     f"{mu:.6f}")
-    p2.metric("EWMA volatility σ",  f"{sigma:.6f}")
-    p3.metric("Student-t DoF ν",    f"{nu:.2f}")
+    p1.metric("Hourly drift mu",    f"{mu:.6f}")
+    p2.metric("EWMA volatility sigma", f"{sigma:.6f}")
+    p3.metric("Student-t DoF nu",   f"{nu:.2f}")
 
 st.divider()
 
-# ── Section 3 — Live prediction history (Part C) ──────────────────────────────
+# ── Part C: Live prediction history ──────────────────────────────────────────
 
-history = load_live_history()
+raw_history = load_live_history()
 
-if len(history) > 1:
-    st.subheader("Part C: Live Prediction History")
+# Deduplicate by bar_time, keep latest visited_at per bar
+df_raw = pd.DataFrame(raw_history) if raw_history else pd.DataFrame()
 
-    df_h = pd.DataFrame(history)
-    df_h["bar_time"] = pd.to_datetime(df_h["bar_time"])
-    df_h = df_h.sort_values("bar_time").drop_duplicates("bar_time").reset_index(drop=True)
-
-    fig2 = go.Figure()
-
-    # BTC price at each prediction time
-    fig2.add_trace(go.Scatter(
-        x=df_h["bar_time"], y=df_h["current_price"],
-        mode="lines+markers", name="BTC at prediction time",
-        line=dict(color="#F7931A", width=2),
-        marker=dict(size=5),
-    ))
-
-    # Confidence ribbon
-    x_ribbon = list(df_h["bar_time"]) + list(df_h["bar_time"])[::-1]
-    y_ribbon  = list(df_h["high_95"]) + list(df_h["low_95"])[::-1]
-    fig2.add_trace(go.Scatter(
-        x=x_ribbon, y=y_ribbon,
-        fill="toself", fillcolor="rgba(30, 120, 255, 0.15)",
-        line=dict(color="rgba(0,0,0,0)"),
-        name="95% CI ribbon",
-    ))
-
-    fig2.update_layout(
-        template="plotly_dark", height=320,
-        xaxis_title="Bar time (UTC)",
-        yaxis_title="BTC Price (USDT)",
-        margin=dict(l=60, r=20, t=20, b=60),
+if not df_raw.empty:
+    df_raw["bar_time"] = pd.to_datetime(df_raw["bar_time"])
+    df_raw = (
+        df_raw.sort_values("visited_at")
+              .drop_duplicates("bar_time", keep="last")
+              .reset_index(drop=True)
     )
-    st.plotly_chart(fig2, use_container_width=True)
+    preds_list = df_raw.to_dict("records")
+    resolved   = resolve_predictions(preds_list, prices)
 
-    display_cols = ["bar_time", "current_price", "low_95", "high_95", "width"]
-    st.dataframe(
-        df_h[display_cols]
-        .tail(30)
-        .set_index("bar_time")
-        .rename(columns={
-            "current_price": "BTC Price",
-            "low_95": "Forecast Low",
-            "high_95": "Forecast High",
-            "width": "Width",
+    resolved_only = [r for r in resolved if r["result"] != "Pending"]
+    hits   = sum(1 for r in resolved_only if r["result"] == "Hit")
+    misses = len(resolved_only) - hits
+    live_cov = hits / len(resolved_only) if resolved_only else None
+
+    st.subheader(f"Part C: Live Prediction History ({len(resolved)} entries)")
+
+    lc1, lc2, lc3 = st.columns(3)
+    lc1.metric("Live Coverage",   f"{live_cov:.3f}" if live_cov is not None else "N/A")
+    lc2.metric("Resolved Hits",   hits)
+    lc3.metric("Resolved Misses", misses)
+
+    # Build display table (newest first)
+    rows = []
+    for r in sorted(resolved, key=lambda x: x["bar_time"], reverse=True):
+        bar_ts = pd.Timestamp(r["bar_time"])
+        result = r["result"]
+        result_label = (
+            "Hit"     if result == "Hit"
+            else "Miss"    if result == "Miss"
+            else "Pending"
+        )
+        rows.append({
+            "Timestamp (UTC)": bar_ts.strftime("%Y-%m-%d %H:%M"),
+            "BTC at Pred":     f"${r['current_price']:,.2f}",
+            "Lo":              f"${r['low_95']:,.2f}",
+            "Hi":              f"${r['high_95']:,.2f}",
+            "Actual":          f"${r['actual']:,.2f}" if r["actual"] else "-",
+            "Result":          result_label,
         })
-        .style.format("${:,.2f}"),
-        use_container_width=True,
-    )
-else:
-    st.info("Live prediction history will appear here after more visits.")
 
-# ── Footer ────────────────────────────────────────────────────────────────────
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+else:
+    st.subheader("Part C: Live Prediction History")
+    st.info("No predictions logged yet. Refresh the page to log the first one.")
+
+# ── Footer ─────────────────────────────────────────────────────────────────────
 
 st.caption(
+    f"Auto-refreshes every 60s  |  "
     f"Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC  |  "
-    "Data: Binance Vision API (public, no API key required)"
+    "Data: Binance BTCUSDT 1h"
 )
