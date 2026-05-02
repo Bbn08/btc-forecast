@@ -56,7 +56,12 @@ def _read_jsonl(path: str) -> list[dict]:
 
 def load_backtest_metrics() -> dict | None:
     preds = _read_jsonl(BACKTEST_FILE)
-    return evaluate(preds) if preds else None
+    if not preds:
+        return None
+    m = evaluate(preds)
+    m["hits"]   = sum(p["covered"] for p in preds)
+    m["misses"] = m["n_predictions"] - m["hits"]
+    return m
 
 
 def append_live_prediction(record: dict) -> None:
@@ -110,12 +115,13 @@ append_live_prediction(live_rec)
 st.subheader("Part A — 30-Day Backtest Metrics  (720 bars)")
 bt = load_backtest_metrics()
 if bt:
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     delta_cov = f"{bt['coverage_95'] - 0.95:+.4f} vs target"
     c1.metric("Coverage 95%",       f"{bt['coverage_95']:.4f}", delta_cov)
-    c2.metric("Avg Width",          f"${bt['avg_width']:,.0f}")
-    c3.metric("Mean Winkler Score", f"${bt['mean_winkler_95']:,.0f}")
-    c4.metric("Predictions",        f"{bt['n_predictions']:,}")
+    c2.metric("Hits / Misses",      f"{bt['hits']} / {bt['misses']}")
+    c3.metric("Avg Width",          f"${bt['avg_width']:,.0f}")
+    c4.metric("Mean Winkler Score", f"${bt['mean_winkler_95']:,.0f}")
+    c5.metric("Predictions",        f"{bt['n_predictions']:,}")
 else:
     st.info(
         "Backtest metrics not yet available. "
