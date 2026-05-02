@@ -86,13 +86,13 @@ def get_data_and_forecast():
 
 # ── Main layout ──────────────────────────────────────────────────────────────
 
-st.title("₿ BTC/USDT — Next-Hour Forecast")
+st.title("BTC/USDT Next-Hour Forecast")
 st.caption(
     "Geometric Brownian Motion · Student-t fat tails · 10,000-path Monte Carlo  |  "
-    "AlphaI × Polaris Challenge"
+    "AlphaI x Polaris Challenge"
 )
 
-with st.spinner("Fetching data & running Monte Carlo…"):
+with st.spinner("Fetching data and running Monte Carlo..."):
     prices, low_95, high_95, mu, sigma, nu = get_data_and_forecast()
 
 current_price = float(prices.iloc[-1])
@@ -112,7 +112,7 @@ append_live_prediction(live_rec)
 
 # ── Section 1 — Backtest metrics (Part A) ────────────────────────────────────
 
-st.subheader("Part A — 30-Day Backtest Metrics  (720 bars)")
+st.subheader("Part A: 30-Day Backtest Metrics (720 bars)")
 bt = load_backtest_metrics()
 if bt:
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -132,7 +132,7 @@ st.divider()
 
 # ── Section 2 — Live forecast ─────────────────────────────────────────────────
 
-st.subheader("Current Forecast")
+st.subheader("Part B: Current Forecast")
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("BTC Price",            f"${current_price:,.2f}",  f"{pct_change:+.2f}%")
@@ -169,7 +169,7 @@ fig.add_trace(go.Scatter(
     fill="toself",
     fillcolor="rgba(30, 120, 255, 0.18)",
     line=dict(color="rgba(0,0,0,0)"),
-    name=f"95% CI  [{low_95:,.0f} – {high_95:,.0f}]",
+    name=f"95% CI  [{low_95:,.0f} to {high_95:,.0f}]",
 ))
 
 # Dashed boundary lines
@@ -205,7 +205,7 @@ st.divider()
 history = load_live_history()
 
 if len(history) > 1:
-    st.subheader("Part C — Live Prediction History")
+    st.subheader("Part C: Live Prediction History")
 
     df_h = pd.DataFrame(history)
     df_h["bar_time"] = pd.to_datetime(df_h["bar_time"])
