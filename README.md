@@ -13,7 +13,7 @@ Refreshes every 60 seconds. No login or API key required.
 
 ---
 
-## Results (Part A — 30-Day Backtest)
+## Results (Part A 30-Day Backtest)
 
 | Metric | Value |
 |---|---|
@@ -29,7 +29,7 @@ Refreshes every 60 seconds. No login or API key required.
 
 ### Why Garman-Klass instead of close-to-close EWMA
 
-Most GBM implementations estimate volatility from closing prices alone — one data point per bar. The **Garman-Klass estimator** uses all four price anchors (Open, High, Low, Close):
+Most GBM implementations estimate volatility from closing prices alone one data point per bar. The **Garman-Klass estimator** uses all four price anchors (Open, High, Low, Close):
 
 ```
 σ²_GK = 0.5 × (ln H/O)² − (2·ln2 − 1) × (ln C/O)²
@@ -45,11 +45,11 @@ Bitcoin hourly returns have excess kurtosis of ~4–5, meaning large moves happe
 ν = 6 / excess_kurtosis + 4   (clamped to [4, 30])
 ```
 
-Typical BTC hourly gives ν ≈ 5–6. The t(5) critical value at 97.5% is **2.57σ** vs **1.96σ** for Normal — 31% wider tails, which is what crypto actually needs.
+Typical BTC hourly gives ν ≈ 5–6. The t(5) critical value at 97.5% is **2.57σ** vs **1.96σ** for Normal 31% wider tails, which is what crypto actually needs.
 
 ### No-peek backtest
 
-At each step `i`, only `ohlcv[:i]` is visible. `ohlcv[i].close` is the actual price revealed after the prediction is made. This is enforced structurally in `backtest.py` — there is no way for future data to leak in.
+At each step `i`, only `ohlcv[:i]` is visible. `ohlcv[i].close` is the actual price revealed after the prediction is made. This is enforced structurally in `backtest.py` there is no way for future data to leak in.
 
 ### Calibration
 
@@ -85,4 +85,4 @@ streamlit run app.py        # start dashboard at localhost:8501
 1. Fork or push this repo to GitHub
 2. Go to [share.streamlit.io](https://share.streamlit.io) → New app
 3. Select repo, branch `master`, main file `app.py`
-4. Click Deploy — free public URL in ~2 minutes
+4. Click Deploy free public URL in ~2 minutes
